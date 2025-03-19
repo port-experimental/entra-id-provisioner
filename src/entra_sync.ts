@@ -8,6 +8,7 @@ interface SyncConfig {
     azureClientId: string;
     azureClientSecret: string;
     groupWhitelist: string[] | null;
+    adminGroup: string | null;
 }
 
 export async function syncEntraToPort(config: SyncConfig) {
@@ -33,15 +34,27 @@ export async function syncEntraToPort(config: SyncConfig) {
     .select('id,displayName,description,members')
     .get();
     
+    let filteredGroups;
     // Filter groups if whitelist is provided
     if (config.groupWhitelist) {
-        groups = groups.value.filter(group => 
+        filteredGroups = groups.value.filter(group => 
             config.groupWhitelist!.some(pattern => new RegExp(pattern).test(group.displayName))
         );
+    } else {
+        filteredGroups = groups.value;
     }
-    
+
+    // If we have an admin group, let's fetch the members of that group
+    let adminGroupMembers = [];
+    if (config.adminGroup) {
+        const adminGroup = groups.value.find(group => group.displayName === config.adminGroup);
+        if (adminGroup) {
+            adminGroupMembers = await graphClient.api(`/groups/${adminGroup.id}/members`).get();
+        }
+    }
+
     // Create Port teams from groups
-    for (const group of groups) {
+    for (const group of filteredGroups) {
         await upsertEntity('_team',
             group.id,
             group.displayName,
@@ -68,6 +81,7 @@ export async function syncEntraToPort(config: SyncConfig) {
                 member.displayName,
                 {
                     email: member.userPrincipalName,
+                    port_role: adminGroupMembers.value.some(admin => admin.userPrincipalName === member.userPrincipalName) ? 'Admin' : 'Member',
                     status: 'Disabled',
                     source: 'entra-id'
                 },
